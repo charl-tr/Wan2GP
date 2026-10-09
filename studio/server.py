@@ -33,6 +33,7 @@ MODELS = {
 }
 RESOLUTIONS = {
     'draft': {'1:1': '512x512', '16:9': '768x432', '9:16': '432x768', '4:3': '640x480'},
+    'high': {'1:1': '1024x1024', '16:9': '1344x768', '9:16': '768x1344', '4:3': '1152x896'},
     'standard': {'1:1': '768x768', '16:9': '1024x576', '9:16': '576x1024', '4:3': '896x672'},
 }
 
@@ -42,7 +43,7 @@ class GenerationRequest(BaseModel):
     kind: Literal['image', 'video'] = 'image'
     mode: Literal['lazy', 'custom'] = 'lazy'
     aspect: Literal['1:1', '16:9', '9:16', '4:3'] = '1:1'
-    quality: Literal['draft', 'standard'] = 'draft'
+    quality: Literal['draft', 'standard', 'high'] = 'high'
     model: str = 'flux2_klein_4b'
     steps: int = Field(default=4, ge=1, le=50)
     seed: int = Field(default=-1, ge=-1, le=2147483647)
@@ -55,8 +56,11 @@ def settings_for(body: GenerationRequest) -> dict:
     model = body.model if body.mode == 'custom' else ('flux2_klein_4b' if body.kind == 'image' else 't2v_1.3B')
     if model not in MODELS or MODELS[model]['kind'] != body.kind:
         raise HTTPException(422, 'Ce modèle ne correspond pas au type de création.')
+    quality = body.quality
+    if body.mode == 'lazy' or quality == 'high':
+        quality = 'high' if body.kind == 'image' else 'standard'
     settings = {'model_type': model, 'prompt': body.prompt.strip(),
-                'resolution': RESOLUTIONS[body.quality][body.aspect], 'batch_size': 1,
+                'resolution': RESOLUTIONS[quality][body.aspect], 'batch_size': 1,
                 'num_inference_steps': body.steps if body.mode == 'custom' else MODELS[model]['steps'],
                 'seed': body.seed if body.mode == 'custom' else -1}
     if body.kind == 'video':

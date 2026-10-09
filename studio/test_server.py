@@ -29,9 +29,16 @@ class StudioTests(unittest.TestCase):
     def test_lazy_ignores_advanced_values(self):
         s = server.settings_for(server.GenerationRequest(prompt='Hat', model='unknown', steps=50, seed=99))
         self.assertEqual((s['model_type'],s['num_inference_steps'],s['seed']),('flux2_klein_4b',4,-1))
+    def test_lazy_upgrades_legacy_draft(self):
+        for quality in ('draft', 'standard', 'high'):
+            settings = server.settings_for(server.GenerationRequest(prompt='Hat', quality=quality))
+            self.assertEqual(settings['resolution'], '1024x1024')
+        video = server.settings_for(server.GenerationRequest(prompt='Hat', kind='video'))
+        self.assertEqual(video['resolution'], '768x768')
+
     def test_custom_preserves_values(self):
         s=server.settings_for(server.GenerationRequest(prompt='Hat',mode='custom',model='z_image',steps=9,seed=42,aspect='9:16'))
-        self.assertEqual((s['model_type'],s['seed'],s['resolution']),('z_image',42,'432x768'))
+        self.assertEqual((s['model_type'],s['seed'],s['resolution']),('z_image',42,'768x1344'))
     def test_rejects_invalid_model_and_empty_prompt(self):
         for payload in ({'prompt':'  '},{'prompt':'hat','mode':'custom','model':'../../secret'},{'prompt':'hat','steps':0},{'prompt':'hat','kind':'video','mode':'custom','model':'flux2_klein_4b'}):
             self.assertEqual(self.client.post('/api/jobs',json=payload).status_code,422)
