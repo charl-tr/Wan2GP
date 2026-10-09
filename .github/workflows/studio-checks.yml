@@ -1,0 +1,20 @@
+name: Studio checks
+on:
+  push:
+    paths: ['studio/**', 'shared/mps/device_patch.py', '.github/workflows/studio-checks.yml']
+  pull_request:
+    paths: ['studio/**', 'shared/mps/device_patch.py', '.github/workflows/studio-checks.yml']
+jobs:
+  boundaries:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: pip install fastapi uvicorn pillow python-multipart httpx
+      - run: python -m unittest studio.test_server studio.test_mps -v
+      - run: node --check studio/web/assets/studio.js && node --test studio/test_bridge.cjs
