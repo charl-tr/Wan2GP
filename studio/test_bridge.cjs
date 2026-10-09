@@ -39,3 +39,7 @@ test('private browsing storage failures retain session-only pairing',()=>{
 test('authenticated media uses a cached blob URL',async()=>{
  const s=setup({stored:'secret'});const a=await s.bridge.media('/media/a.jpg');const b=await s.bridge.media('/media/a.jpg');assert.equal(a,b);assert.ok(a.startsWith('blob:'));assert.equal(s.calls.length,1);
 });
+
+test('paired reconnect retries from the user gesture without issuing new credentials',()=>{
+ const s=setup({stored:'secret'});s.context.window.open=()=>{throw Error('Should not open a new pairing');};s.bridge.connect();assert.deepEqual(s.events,['bridge-connected']);
+});

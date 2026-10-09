@@ -25,6 +25,9 @@ const Bridge = (() => {
  function setToken(value){token=value.trim();try{localStorage.setItem('after-bridge-token',token);}catch{}window.dispatchEvent(new Event('bridge-connected'));}
  function connect(){
   if(local)return;
+  // Retry from a direct user gesture: some browsers defer the network
+  // permission when the first request follows a popup message.
+  if(token){window.dispatchEvent(new Event('bridge-connected'));return;}
   popup=window.open(base+'/?pair_origin='+encodeURIComponent(location.origin),'after-pair','popup,width=600,height=650');
   if(!popup)window.dispatchEvent(new CustomEvent('bridge-error',{detail:'Autorise les pop-ups pour connecter ton Mac.'}));
  }

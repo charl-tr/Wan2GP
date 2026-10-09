@@ -49,7 +49,7 @@ node --test studio/test_bridge.cjs
 node --check studio/web/assets/studio.js
 ```
 
-There are 15 API checks, six JavaScript transport checks, and an isolated macOS regression check for MPS synchronization, idempotent patch installation and BF16 reference normalization. GitHub Actions runs the API and transport checks; the MPS check needs a Mac.
+There are 15 API checks, seven JavaScript transport checks, and an isolated macOS regression check for MPS synchronization, idempotent patch installation and BF16 reference normalization. GitHub Actions runs the API and transport checks; the MPS check needs a Mac.
 
 Real local tests on 9 October 2026, M2 Pro / 16 GB:
 
