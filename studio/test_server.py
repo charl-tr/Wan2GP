@@ -122,6 +122,14 @@ class StudioTests(unittest.TestCase):
             self.assertTrue((self.data/'trash'/key/'request.json').is_file())
             self.assertEqual(self.client.get('/api/jobs').json(),[])
 
+    def test_history_reports_actual_image_dimensions(self):
+        folder=self.data/'jobs'/'one';folder.mkdir()
+        Image.new('RGB',(576,576),'green').save(self.data/'media'/'one.png')
+        (folder/'request.json').write_text(json.dumps({'created':0,'request':{'prompt':'hat'},'settings':{'resolution':'768x432'}}))
+        (folder/'status.json').write_text(json.dumps({'state':'completed','files':[{'kind':'image','url':'/media/one.png'}]}))
+        file=self.client.get('/api/jobs').json()[0]['files'][0]
+        self.assertEqual((file['width'],file['height']),(576,576))
+
     def test_unknown_fields_rejected(self):
         self.assertEqual(self.client.post('/api/jobs',json={'prompt':'hat','command':'echo bad'}).status_code,422)
 

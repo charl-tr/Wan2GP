@@ -49,14 +49,14 @@ node --test studio/test_bridge.cjs
 node --check studio/web/assets/studio.js
 ```
 
-There are 14 API checks, six JavaScript transport checks, and an isolated macOS regression check for MPS synchronization, idempotent patch installation and BF16 reference normalization. GitHub Actions runs the API and transport checks; the MPS check needs a Mac.
+There are 15 API checks, six JavaScript transport checks, and an isolated macOS regression check for MPS synchronization, idempotent patch installation and BF16 reference normalization. GitHub Actions runs the API and transport checks; the MPS check needs a Mac.
 
 Real local tests on 9 October 2026, M2 Pro / 16 GB:
 
 - Text-to-image: a red ceramic cup and a matte black perfume bottle produced actual images. The bottle completed through the studio UI in about 106 seconds; its browser download matches the generated file.
-- Reference editing: the black bottle became green glass after correcting an MPS normalization crash, completing in about 128 seconds.
+- Reference editing: the black bottle became green glass after correcting an MPS normalization crash, completing in about 128 seconds. A further run confirmed the selected landscape format (768 × 432) in 144 seconds. Legacy history also reports actual output dimensions.
 - The original all-black outputs were traced to unsafe MPS synchronization around reused model buffers. The compatibility patch now synchronizes these fences and only installs once.
-- Desktop UI, draft persistence, Lazy/Custom, gallery, errors, reuse and download were exercised. This is a tested personal image workflow, not a claim that every upstream model or video pipeline is production-ready.
+- Desktop and 390 px layout (no horizontal overflow), draft persistence, Lazy/Custom, gallery, errors, reuse and download were exercised. This is a tested personal image workflow, not a claim that every upstream model or video pipeline is production-ready.
 
 ## Deploy
 

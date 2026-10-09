@@ -179,6 +179,17 @@ def job_snapshot(folder):
         running_here = folder.name in active
     if status.get('state') in ('starting', 'running', 'downloading') and not running_here:
         status = {**status, 'state': 'failed', 'message': 'Le studio a été interrompu. Relance cette création.'}
+    # Old records predate dimension metadata; report the actual output, not
+    # the requested canvas (upstream may have inherited a reference's shape).
+    for file in status.get('files', []):
+        if file.get('kind') == 'image' and 'width' not in file:
+            path = DATA / 'media' / Path(file.get('url', '')).name
+            try:
+                from PIL import Image
+                with Image.open(path) as image:
+                    file.update(width=image.width, height=image.height)
+            except (OSError, ValueError):
+                pass
     if status.get('state') in ('completed', 'failed', 'cancelled') and 'elapsed_seconds' not in status:
         status['elapsed_seconds'] = round(max(0, (folder / 'status.json').stat().st_mtime - data['created']), 1) if (folder / 'status.json').exists() else 0
     return {'id': folder.name, 'created': data['created'], 'request': data['request'], 'settings': data['settings'], **status}
