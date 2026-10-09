@@ -1,0 +1,6 @@
+Reference photographs (Unsplash CDN):
+portrait.jpg https://images.unsplash.com/photo-1534528741775-53994a69daeb
+landscape.jpg https://images.unsplash.com/photo-1470770841072-f978cf4d019e
+product.jpg https://images.unsplash.com/photo-1541643600914-78b084683601
+cosmos.jpg https://images.unsplash.com/photo-1519608487953-e999c86e7455
+Lucide 0.468.0 https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js (ISC)
