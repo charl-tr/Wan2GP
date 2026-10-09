@@ -31,6 +31,16 @@ MODELS = {
     'flux_schnell': {'name': 'Flux Schnell', 'size': '12B', 'kind': 'image', 'steps': 4},
     't2v_1.3B': {'name': 'Wan 2.1', 'size': '1.3B', 'kind': 'video', 'steps': 20},
 }
+def schnell_unavailable():
+    if sys.platform != 'darwin':
+        return False
+    try:
+        return int(subprocess.check_output(['sysctl', '-n', 'hw.memsize'])) <= 16 * 1024**3
+    except (OSError, ValueError, subprocess.CalledProcessError):
+        return False
+
+SCHNELL_UNAVAILABLE = schnell_unavailable()
+
 RESOLUTIONS = {
     'draft': {'1:1': '512x512', '16:9': '768x432', '9:16': '432x768', '4:3': '640x480'},
     'high': {'1:1': '1024x1024', '16:9': '1344x768', '9:16': '768x1344', '4:3': '1152x896'},
@@ -59,6 +69,8 @@ def settings_for(body: GenerationRequest) -> dict:
     quality = body.quality
     if body.mode == 'lazy' or quality == 'high':
         quality = 'high' if body.kind == 'image' else 'standard'
+    if model == 'flux_schnell' and SCHNELL_UNAVAILABLE:
+        raise HTTPException(422, 'Flux Schnell est indisponible sur ce Mac de 16 Go après des arrêts répétés. Choisis Flux 2 Klein.')
     settings = {'model_type': model, 'prompt': body.prompt.strip(),
                 'resolution': RESOLUTIONS[quality][body.aspect], 'batch_size': 1,
                 'num_inference_steps': body.steps if body.mode == 'custom' else MODELS[model]['steps'],
@@ -136,7 +148,7 @@ async def local_requests(request: Request, call_next):
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['X-Frame-Options'] = 'DENY'
-    if request.url.path.startswith('/api/'):
+    if request.url.path.startswith('/api/') or request.url.path.startswith('/assets/') or request.url.path == '/':
         response.headers['Cache-Control'] = 'no-store'
     return response
 
@@ -170,7 +182,7 @@ def index():
 
 @app.get('/api/config')
 def config():
-    return {'models': [{'id': key, **value} for key, value in MODELS.items()],
+    return {'models': [{'id': key, **value} for key, value in MODELS.items() if not (key == 'flux_schnell' and SCHNELL_UNAVAILABLE)],
             'version': '0.2.0', 'engine': 'WanGP', 'device': 'Apple Silicon' if sys.platform == 'darwin' else 'GPU local'}
 
 
