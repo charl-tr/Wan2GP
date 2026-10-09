@@ -78,11 +78,22 @@ function renderJobs(){
  $$('[data-job]').forEach(b=>b.onclick=()=>showJob(b.dataset.job));icons();setBusy();updateElapsed();
 }
 async function cancelJob(id){try{await api(`/api/jobs/${id}/cancel`,{method:'POST'});toast('Arrêt demandé. Le moteur libère la mémoire.');await refresh();}catch(e){toast(e.message);}}
-async function reuse(job){setKind(job.request.kind);setMode(job.request.mode);$('#model').value=job.settings.model_type;$('#steps').value=job.settings.num_inference_steps;$('#seed').value=job.request.seed;$('#aspect').value=job.request.aspect;$('#quality').value='high';$('#prompt').value=job.request.prompt;removeReference();if(job.request.reference){state.reference=job.request.reference;$('#reference-preview').innerHTML=`<img src="${await Bridge.media(`/uploads/${state.reference}.png`)}" alt="Image de référence"><button type="button" aria-label="Retirer la référence">×</button>`;$('#reference-preview button').onclick=removeReference;$('#reference-preview').hidden=false;}hint();saveDraft();$('#detail').close();selectView('create');$('#prompt').focus();}
+function reuse(job){
+ const prompt=$('#prompt');
+ prompt.value=job.request.prompt;
+ saveDraft();
+ $('#detail').close();
+ selectView('create');
+ prompt.focus({preventScroll:true});
+ prompt.scrollIntoView({behavior:'smooth',block:'center'});
+ prompt.setSelectionRange(prompt.value.length,prompt.value.length);
+ toast('Prompt repris. Tes réglages actuels sont conservés.');
+}
+
 function showJob(id){
  const job=state.jobs.find(j=>j.id===id);if(!job)return;
  $('#detail-content').innerHTML=`${(job.files||[]).map(f=>mediaMarkup(f,true)).join('')}<h3>${job.state==='completed'?'Ton idée, en vrai.':escapeHtml(job.message)}</h3><p>${escapeHtml(job.request.prompt)}</p><p>${escapeHtml(job.settings.model_type)} · ${escapeHtml(resolution(job))} · ${job.settings.num_inference_steps} étapes${job.elapsed_seconds?` · ${duration(job.elapsed_seconds)}`:""}</p>${job.error?`<details open><summary>Détails du problème</summary><pre>${escapeHtml(job.error)}</pre></details>`:''}<div class="dialog-actions"><button class="quiet-button" id="reuse"><i data-lucide="repeat-2"></i> Réutiliser le prompt</button>${(job.files||[]).map((f,i)=>`<a class="quiet-button" href="${f.url}" download="${escapeHtml(f.name||'after-creation.jpg')}"><i data-lucide="download"></i> Télécharger${i?' '+(i+1):''}</a>`).join('')}${isActive(job)?'<button class="quiet-button" id="cancel-detail">Arrêter</button>':''}<button class="text-button" id="logs">Voir le journal</button>${!isActive(job)?'<button class="text-button" id="archive-job">Retirer de la galerie</button>':''}</div><pre id="log-content" hidden></pre>`;
- $('#reuse').onclick=()=>reuse(job).catch(e=>toast(e.message));if($('#archive-job'))$('#archive-job').onclick=async()=>{try{await api(`/api/jobs/${id}`,{method:'DELETE'});$('#detail').close();await refresh();toast('Création retirée de la galerie. Le fichier reste sur ton Mac.');}catch(e){toast(e.message);}};if($('#cancel-detail'))$('#cancel-detail').onclick=()=>{cancelJob(id);$('#detail').close();};
+ $('#reuse').onclick=()=>reuse(job);if($('#archive-job'))$('#archive-job').onclick=async()=>{try{await api(`/api/jobs/${id}`,{method:'DELETE'});$('#detail').close();await refresh();toast('Création retirée de la galerie. Le fichier reste sur ton Mac.');}catch(e){toast(e.message);}};if($('#cancel-detail'))$('#cancel-detail').onclick=()=>{cancelJob(id);$('#detail').close();};
  $('#logs').onclick=async()=>{try{const log=await api(`/api/jobs/${id}/log`);$('#log-content').textContent=log.text||'Le moteur démarre…';$('#log-content').hidden=false;}catch(e){toast(e.message);}};
  icons();$('#detail').showModal();
 }
