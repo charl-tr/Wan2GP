@@ -295,6 +295,13 @@ class AutoencoderKLFlux2(nn.Module):
 
     def normalize(self, z):
         self.bn.eval()
+        if z.device.type == "mps":
+            # MPSGraph aborts the process for BF16 activations with FP32
+            # running statistics. Eval-mode BatchNorm is just this affine
+            # normalization; accumulate in FP32 and retain the latent dtype.
+            mean = self.bn.running_mean.float().view(1, -1, 1, 1)
+            variance = self.bn.running_var.float().view(1, -1, 1, 1)
+            return ((z.float() - mean) * torch.rsqrt(variance + self.bn_eps)).to(z.dtype)
         return self.bn(z)
 
     def inv_normalize(self, z):

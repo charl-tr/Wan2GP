@@ -2,6 +2,7 @@
 import json
 import shutil
 import sys
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -15,8 +16,11 @@ def validate_image(path):
 
 def main():
     folder = Path(sys.argv[1]).resolve()
+    started = time.monotonic()
     payload = json.loads((folder / 'request.json').read_text())
     def status(**data):
+        if data.get('state') in ('completed', 'failed'):
+            data['elapsed_seconds'] = round(time.monotonic() - started, 1)
         path = folder / 'status.json'
         tmp = folder / 'status.worker.tmp'
         tmp.write_text(json.dumps(data, ensure_ascii=False))
@@ -71,7 +75,12 @@ def main():
                     validate_image(source)
                 name = f'{folder.name}-{index}{suffix}'
                 shutil.copy2(source, ROOT / '.studio' / 'media' / name)
-                files.append({'url': '/media/' + name, 'kind': 'video' if suffix in {'.mp4', '.webm'} else 'image'})
+                entry = {'url': '/media/' + name, 'kind': 'video' if suffix in {'.mp4', '.webm'} else 'image'}
+                if entry['kind'] == 'image':
+                    from PIL import Image
+                    with Image.open(source) as image:
+                        entry.update(width=image.width, height=image.height)
+                files.append(entry)
         if result.success and files:
             status(state='completed', message='C’est prêt.', progress=100, files=files)
         else:

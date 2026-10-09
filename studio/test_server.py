@@ -13,15 +13,18 @@ class StudioTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.data = Path(self.tmp.name)
-        for name in ('jobs','media','uploads'):
+        for name in ('jobs','media','uploads','trash'):
             (self.data / name).mkdir()
         self.patch = patch.object(server, 'DATA', self.data)
         self.patch.start()
+        self.bridge_patch=patch.object(server,'bridge',server.BridgeAuth(self.data/'sessions.json'))
+        self.bridge_patch.start()
         self.client = TestClient(server.app, base_url='http://127.0.0.1')
         server.active.clear()
     def tearDown(self):
         server.active.clear()
         self.patch.stop()
+        self.bridge_patch.stop()
         self.tmp.cleanup()
     def test_lazy_ignores_advanced_values(self):
         s = server.settings_for(server.GenerationRequest(prompt='Hat', model='unknown', steps=50, seed=99))
@@ -45,6 +48,7 @@ class StudioTests(unittest.TestCase):
         key=res.json()['id']
         s=server.settings_for(server.GenerationRequest(prompt='hat',reference=key))
         self.assertTrue(Path(s['image_refs'][0]).is_file())
+        self.assertEqual(s['video_prompt_type'], 'I')
         self.assertEqual(self.client.post('/api/uploads',files={'file':('bad.png',b'not an image','image/png')}).status_code,422)
         self.assertEqual(self.client.post('/api/jobs',json={'prompt':'hat','reference':'../../secret'}).status_code,422)
     def test_interrupted_history_is_not_stuck_running(self):
@@ -67,6 +71,59 @@ class StudioTests(unittest.TestCase):
         server.run_job('one',folder)
         self.assertEqual(json.loads((folder/'status.json').read_text())['state'],'cancelled')
         self.assertNotIn('one',server.active)
+
+    def test_pairing_is_origin_bound_and_revocable(self):
+        origin='https://studio.example'
+        res=self.client.post('/api/local/pair',json={'origin':origin})
+        self.assertEqual(res.status_code,200)
+        token=res.json()['token']
+        headers={'Origin':origin,'Authorization':'Bearer '+token}
+        self.assertEqual(self.client.get('/api/jobs',headers=headers).status_code,200)
+        self.assertEqual(self.client.get('/api/jobs',headers={'Origin':origin}).status_code,401)
+        self.assertEqual(self.client.get('/api/jobs',headers={**headers,'Origin':'https://other.example'}).status_code,403)
+        self.assertEqual(self.client.post('/api/local/pair',json={'origin':'https://other.example'},headers=headers).status_code,403)
+        self.assertEqual(self.client.delete('/api/local/connections',headers=headers).status_code,403)
+        self.assertNotIn(token,(self.data/'sessions.json').read_text())
+        self.client.delete('/api/local/connections')
+        self.assertEqual(self.client.get('/api/jobs',headers=headers).status_code,403)
+
+    def test_pairing_validation_and_preflight(self):
+        for origin in ['http://example.com','https://example.com/path','https://user:pass@example.com','https://example.com?x=1','https://example.com:bad']:
+            self.assertEqual(self.client.post('/api/local/pair',json={'origin':origin}).status_code,422)
+        origin='https://studio.example'
+        self.client.post('/api/local/pair',json={'origin':origin})
+        res=self.client.options('/api/jobs',headers={'Origin':origin,'Access-Control-Request-Method':'POST','Access-Control-Request-Private-Network':'true'})
+        self.assertEqual(res.status_code,200)
+        self.assertEqual(res.headers['access-control-allow-origin'],origin)
+        self.assertEqual(res.headers['access-control-allow-private-network'],'true')
+        self.assertEqual(self.client.get('/api/jobs',headers={'Sec-Fetch-Site':'cross-site'}).status_code,403)
+
+    def test_expired_pairing_fails(self):
+        with patch('studio.bridge.time.time',return_value=1):
+            token=server.bridge.approve('https://studio.example')
+        self.assertFalse(server.bridge.authorized('https://studio.example',token))
+
+    def test_idempotent_submission_and_archive(self):
+        original_start=server.threading.Thread.start
+        def start_if_not_worker(thread):
+            if thread._target is not server.run_job:
+                return original_start(thread)
+        with patch.object(server.threading.Thread,'start',start_if_not_worker):
+            headers={'Idempotency-Key':'same-intent'}
+            first=self.client.post('/api/jobs',json={'prompt':'hat'},headers=headers)
+            second=self.client.post('/api/jobs',json={'prompt':'hat'},headers=headers)
+            self.assertEqual(first.status_code,202)
+            self.assertEqual(first.json(),second.json())
+            self.assertEqual(self.client.post('/api/jobs',json={'prompt':'different'},headers=headers).status_code,409)
+            key=first.json()['id']
+            self.assertEqual(self.client.delete('/api/jobs/'+key).status_code,409)
+            server.active.clear()
+            self.assertEqual(self.client.delete('/api/jobs/'+key).status_code,200)
+            self.assertTrue((self.data/'trash'/key/'request.json').is_file())
+            self.assertEqual(self.client.get('/api/jobs').json(),[])
+
+    def test_unknown_fields_rejected(self):
+        self.assertEqual(self.client.post('/api/jobs',json={'prompt':'hat','command':'echo bad'}).status_code,422)
 
 if __name__=='__main__':
     unittest.main()

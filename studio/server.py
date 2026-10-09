@@ -16,12 +16,13 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
+from studio.bridge import BridgeAuth
 
 ROOT = Path(__file__).resolve().parents[1]
 DATA = ROOT / '.studio'
 WEB = Path(__file__).parent / 'web'
-for name in ('jobs', 'media', 'uploads'):
+for name in ('jobs', 'media', 'uploads', 'trash'):
     (DATA / name).mkdir(parents=True, exist_ok=True)
 
 MODELS = {
@@ -36,6 +37,7 @@ RESOLUTIONS = {
 }
 
 class GenerationRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
     prompt: str = Field(min_length=1, max_length=8000)
     kind: Literal['image', 'video'] = 'image'
     mode: Literal['lazy', 'custom'] = 'lazy'
@@ -44,7 +46,7 @@ class GenerationRequest(BaseModel):
     model: str = 'flux2_klein_4b'
     steps: int = Field(default=4, ge=1, le=50)
     seed: int = Field(default=-1, ge=-1, le=2147483647)
-    reference: str | None = None
+    reference: str | None = Field(default=None, max_length=64)
 
 
 def settings_for(body: GenerationRequest) -> dict:
@@ -66,6 +68,9 @@ def settings_for(body: GenerationRequest) -> dict:
         if not body.reference.isalnum() or not path.is_file():
             raise HTTPException(422, 'Image de référence introuvable. Ajoute-la à nouveau.')
         settings['image_refs'] = [str(path)]
+        # 'KI' inherits the first reference's aspect ratio; 'I' conditions on
+        # the image while preserving the format chosen in this studio.
+        settings['video_prompt_type'] = 'I'
     return settings
 
 
@@ -97,16 +102,63 @@ app = FastAPI(title='AFTER Studio · Powered by WanGP', lifespan=lifespan)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=['127.0.0.1', 'localhost'])
 lock = threading.RLock()
 active: dict = {}
+bridge = BridgeAuth(DATA / 'bridge-sessions.json')
 
 @app.middleware('http')
 async def local_requests(request: Request, call_next):
-    # Reject cross-origin mutations even on a loopback service.
-    origin = request.headers.get('origin')
-    if request.method not in ('GET', 'HEAD', 'OPTIONS') and origin and origin != str(request.base_url).rstrip('/'):
-        return JSONResponse({'detail': 'Origin non autorisée.'}, status_code=403)
+    origin = request.headers.get('origin', '')
+    local_origin = str(request.base_url).rstrip('/')
+    remote = bool(origin and origin != local_origin)
+    cors = {}
+    if remote:
+        if not bridge.allowed(origin):
+            return JSONResponse({'detail': 'Ce site doit être appairé depuis le moteur local.'}, status_code=403)
+        cors = {'Access-Control-Allow-Origin': origin, 'Vary': 'Origin',
+                'Access-Control-Allow-Headers': 'Authorization, Content-Type, Idempotency-Key',
+                'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+                'Access-Control-Allow-Private-Network': 'true'}
+        if request.method == 'OPTIONS':
+            return JSONResponse({}, headers=cors)
+        if request.url.path.startswith('/api/local/'):
+            return JSONResponse({'detail': 'Action réservée au studio local.'}, status_code=403, headers=cors)
+        token = request.headers.get('authorization', '').removeprefix('Bearer ')
+        if not bridge.authorized(origin, token):
+            return JSONResponse({'detail': 'Connexion expirée. Appaire à nouveau ton Mac.'}, status_code=401, headers=cors)
+    elif request.headers.get('sec-fetch-site') == 'cross-site' and request.url.path != '/':
+        # Cross-site image/form requests may omit Origin. Do not expose local files.
+        return JSONResponse({'detail': 'Une connexion appairée est requise.'}, status_code=403)
     response = await call_next(request)
+    response.headers.update(cors)
     response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    if request.url.path.startswith('/api/'):
+        response.headers['Cache-Control'] = 'no-store'
     return response
+
+class PairRequest(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    origin: str = Field(max_length=300)
+
+@app.post('/api/local/pair')
+def approve_pair(body: PairRequest):
+    try:
+        return {'token': bridge.approve(body.origin), 'origin': body.origin}
+    except ValueError as exc:
+        raise HTTPException(422, str(exc))
+
+@app.get('/api/local/connections')
+def connections():
+    return bridge.list_origins()
+
+@app.delete('/api/local/connections')
+def revoke_connections():
+    bridge.revoke_all()
+    return {'ok': True}
+
+@app.get('/api/health')
+def health():
+    return {'ok': True, 'version': '0.2.0', 'active_jobs': len(active)}
 
 @app.get('/')
 def index():
@@ -115,7 +167,7 @@ def index():
 @app.get('/api/config')
 def config():
     return {'models': [{'id': key, **value} for key, value in MODELS.items()],
-            'engine': 'WanGP', 'device': 'Apple Silicon' if sys.platform == 'darwin' else 'GPU local'}
+            'version': '0.2.0', 'engine': 'WanGP', 'device': 'Apple Silicon' if sys.platform == 'darwin' else 'GPU local'}
 
 
 def job_snapshot(folder):
@@ -127,6 +179,8 @@ def job_snapshot(folder):
         running_here = folder.name in active
     if status.get('state') in ('starting', 'running', 'downloading') and not running_here:
         status = {**status, 'state': 'failed', 'message': 'Le studio a été interrompu. Relance cette création.'}
+    if status.get('state') in ('completed', 'failed', 'cancelled') and 'elapsed_seconds' not in status:
+        status['elapsed_seconds'] = round(max(0, (folder / 'status.json').stat().st_mtime - data['created']), 1) if (folder / 'status.json').exists() else 0
     return {'id': folder.name, 'created': data['created'], 'request': data['request'], 'settings': data['settings'], **status}
 
 @app.get('/api/jobs')
@@ -145,7 +199,17 @@ def run_job(job_id, folder):
             process = subprocess.Popen([sys.executable, '-u', '-m', 'studio.worker', str(folder)],
                 cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             active[job_id] = process
-        code = process.wait()
+        try:
+            code = process.wait(timeout=1800)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            code = -1
+            write_json(folder / 'status.json', {'state': 'failed', 'message': 'Limite de 30 minutes atteinte.', 'error': 'Essaie une résolution plus basse ou un modèle plus léger.', 'progress': None})
         with lock:
             cancelled = active.get(job_id) == 'cancelled'
             status = read_json(folder / 'status.json', {})
@@ -161,15 +225,23 @@ def run_job(job_id, folder):
             active.pop(job_id, None)
 
 @app.post('/api/jobs', status_code=202)
-def create_job(body: GenerationRequest):
+def create_job(body: GenerationRequest, request: Request):
     settings = settings_for(body)
     with lock:
+        idempotency_key = request.headers.get('idempotency-key', '')[:128]
+        if idempotency_key:
+            for folder in (DATA / 'jobs').iterdir():
+                prior = read_json(folder / 'request.json', {})
+                if prior.get('idempotency_key') == idempotency_key:
+                    if prior['request'] != body.model_dump():
+                        raise HTTPException(409, 'Cette requête a déjà été utilisée avec un autre prompt.')
+                    return {'id': folder.name}
         if active:
             raise HTTPException(409, 'Une création est déjà en cours. Attends la fin ou arrête-la.')
         job_id = f'{time.time_ns()}-{uuid.uuid4().hex[:8]}'
         folder = DATA / 'jobs' / job_id
         folder.mkdir()
-        write_json(folder / 'request.json', {'request': body.model_dump(), 'settings': settings, 'created': time.time()})
+        write_json(folder / 'request.json', {'request': body.model_dump(), 'settings': settings, 'created': time.time(), 'idempotency_key': idempotency_key})
         write_json(folder / 'status.json', {'state': 'starting', 'message': 'Préparation du moteur…', 'progress': None})
         active[job_id] = None
         threading.Thread(target=run_job, args=(job_id, folder), daemon=True).start()
@@ -183,7 +255,10 @@ def cancel(job_id: str):
         process = active[job_id]
         active[job_id] = 'cancelled'
         if isinstance(process, subprocess.Popen) and process.poll() is None:
-            os.killpg(process.pid, signal.SIGTERM)
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
     return {'ok': True}
 
 @app.get('/api/jobs/{job_id}/log')
@@ -193,7 +268,24 @@ def job_log(job_id: str):
     path = DATA / 'jobs' / job_id / 'engine.log'
     if not path.is_file():
         raise HTTPException(404)
-    return {'text': path.read_text(errors='replace')[-18000:]}
+    with path.open('rb') as log:
+        log.seek(max(0, path.stat().st_size - 18000))
+        return {'text': log.read().decode(errors='replace')}
+
+
+@app.delete('/api/jobs/{job_id}')
+def archive_job(job_id: str):
+    if '/' in job_id or '..' in job_id:
+        raise HTTPException(404)
+    with lock:
+        if job_id in active:
+            raise HTTPException(409, 'Arrête cette création avant de la retirer.')
+        folder = DATA / 'jobs' / job_id
+        if not folder.is_dir():
+            raise HTTPException(404)
+        (DATA / 'trash').mkdir(exist_ok=True)
+        folder.rename(DATA / 'trash' / job_id)
+    return {'ok': True}
 
 @app.post('/api/uploads')
 async def upload(file: UploadFile):

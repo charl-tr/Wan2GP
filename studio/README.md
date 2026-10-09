@@ -1,40 +1,67 @@
 # AFTER Studio
 
-A minimal local creative studio powered by **WanGP**, with Lazy presets and a Custom panel. This is an independent interface, not affiliated with Higgsfield.
+A personal creative studio powered by WanGP. Lazy presets for a first image; Custom for model, steps, seed, format and reference images. Independent project, not affiliated with Higgsfield.
 
-## Run
+## Use on this Mac
 
-From the repository root, after installing the main WanGP requirements:
+From the repository root, after installing the main WanGP requirements into `.venv`:
 
 ```sh
-.venv/bin/python -m studio.server
+./studio/start.sh
 ```
 
-Open http://127.0.0.1:7861. The original WanGP interface can stay on port 7860; do not run generations simultaneously in both on a memory-constrained machine.
+On macOS, you can also double-click `studio/Start AFTER.command`. Keep its terminal open. Open http://127.0.0.1:7861, describe an image, then choose **Créer**. Lazy defaults to Flux 2 Klein, four steps, 512 × 512. The first run downloads the model. Subsequent generations still reload its weights so that idle workers do not occupy GPU memory.
 
-## Features
+The original WanGP UI can run separately on port 7860. Avoid simultaneous generation in both interfaces on a 16 GB Mac.
 
-- Real WanGP Python API generation, isolated in one subprocess per job.
-- Images (Flux 2 Klein by default) and experimental two-second Wan 2.1 videos.
-- Prompt presets, aspect ratio, quality, image reference upload.
-- Custom model, steps, seed, plus a link to the full WanGP interface.
-- Persistent job history, progress, cancellation, errors, engine logs, file download and prompt reuse.
-- No account, paid API or cloud inference. The first generation downloads model files from upstream sources.
+## Hosted interface
 
-Data lives in `.studio/` (ignored by Git); model downloads use WanGP's normal `ckpts/` directory. The worker releases loaded models after each job to recover memory. Thus each generation pays a model-loading cost. The server binds to loopback, rejects cross-origin writes, and serves generated files only from its own media directory. It is intended for local personal use, not public hosting.
+Production URL: https://after-studio.vercel.app
+
+Vercel serves only `studio/web`. Python, GPU inference, model weights, job history, references and generated files stay on the Mac. No paid inference API, tunnel, public backend or LAN listener is used.
+
+1. Start the local engine with the command above.
+2. Open the hosted interface **on the same Mac** and choose **Connecter mon Mac**.
+3. In the local window, verify the exact HTTPS origin and choose **Autoriser**.
+4. Allow local-network access if the browser asks. The header must show **Mac connecté** before you can create.
+
+If the popup cannot open, the connection panel offers a manual pairing code. If the browser cannot access loopback, use **Ouvrir directement le studio sur ce Mac**; it has the same features. Pairing approval alone does not prove network connectivity. The Codex integrated browser's cloud-to-loopback requests timed out during this session; that browser path is not yet validated.
+
+Access expires after 30 days and is revocable under the local studio's information button. Tokens are bound to an exact origin, stored as hashes by the engine, and sent in authorization headers, never media URLs. The hosted UI retrieves media as authenticated blobs. The local server accepts only localhost/127.0.0.1 hostnames, protects pairing endpoints from remote use, and rejects unapproved origins.
+
+## Behavior
+
+- One isolated subprocess per generation; progress, persistent history, cancellation and a 30-minute limit.
+- Idempotency keys prevent repeated submissions from launching the same accepted request twice.
+- Prompt drafts survive reloads in browser storage.
+- Uploads are validated, stripped of metadata, converted to PNG and limited to 10 MB / 25 million input pixels.
+- Gallery results can be downloaded, reused or removed. Removing a job moves its record into `.studio/trash`; media remains on disk.
+- Interrupted jobs become explicit failures after restart. Entirely black outputs are rejected.
+- Images and two-second Wan videos are exposed; **video and alternative image models remain experimental and have not been validated here**. Video tooling may require FFmpeg/FFprobe installation on macOS.
+
+All local data is under `.studio/`, ignored by Git. Model downloads use `ckpts/`. Never deploy the repository root or upload local data; the Vercel project root is `studio/web`.
 
 ## Verification
 
 ```sh
-.venv/bin/python -m unittest studio.test_server
+.venv/bin/python -m unittest studio.test_server studio.test_mps -v
+node --test studio/test_bridge.cjs
+node --check studio/web/assets/studio.js
 ```
 
-UI readiness does not imply a particular model works on every GPU. WanGP's Apple Silicon support is experimental, and video export requires FFmpeg. No synthetic output is substituted when the engine fails.
+There are 14 API checks, six JavaScript transport checks, and an isolated macOS regression check for MPS synchronization, idempotent patch installation and BF16 reference normalization. GitHub Actions runs the API and transport checks; the MPS check needs a Mac.
+
+Real local tests on 9 October 2026, M2 Pro / 16 GB:
+
+- Text-to-image: a red ceramic cup and a matte black perfume bottle produced actual images. The bottle completed through the studio UI in about 106 seconds; its browser download matches the generated file.
+- Reference editing: the black bottle became green glass after correcting an MPS normalization crash, completing in about 128 seconds.
+- The original all-black outputs were traced to unsafe MPS synchronization around reused model buffers. The compatibility patch now synchronizes these fences and only installs once.
+- Desktop UI, draft persistence, Lazy/Custom, gallery, errors, reuse and download were exercised. This is a tested personal image workflow, not a claim that every upstream model or video pipeline is production-ready.
+
+## Deploy
+
+Link the GitHub fork to Vercel, set Root Directory to `studio/web`, framework to Other, no build/install commands, output directory `.`. `vercel.json` sets content security and cache headers. The current implementation lives on `codex/minimal-studio`; deploy that branch for Studio updates. The fork's `main` remains upstream WanGP.
 
 ## Credits
 
-Generation engine: WanGP, under its repository license. Model licenses also apply. The UI discloses the WanGP integration. Inspiration cards use photographs from Unsplash (source image URLs in `studio/web/assets/SOURCES.txt`); they are explicitly marked as reference photos, not generated results. Icons: Lucide (ISC). Typography: DM Sans and Space Grotesk, served by Google Fonts (falls back to system fonts offline).
-
-## Local verification — 9 October 2026
-
-The UI was exercised at desktop size and at 390 px: Lazy/Custom, presets, draft persistence, history, failure detail and prompt reuse. Nine API/unit checks pass. Three real Flux 2 Klein jobs on this M2 Pro / 16 GB reached model loading, text encoding, four denoising steps and export, but produced all-black images. Forcing BF16 and using FP32 VAE decoding did not resolve this. These jobs are marked as failures, with engine logs retained; image generation on this machine is **not yet validated**. Video and reference-conditioned inference have not been validated end to end. The studio does not substitute stock imagery for generated output.
+WanGP and its model licenses apply. Inspiration cards are explicitly labeled Unsplash reference photographs, not generated results; sources are in `studio/web/assets/SOURCES.txt`. Icons: Lucide (ISC). Fonts: DM Sans and Space Grotesk through Google Fonts, with system fallbacks.

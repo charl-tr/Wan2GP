@@ -20,6 +20,10 @@ def apply_mps_patch():
     """Patch torch.cuda functions for MPS compatibility."""
     import torch as _torch
 
+    if getattr(_torch, '_wangp_mps_patched', False):
+        return
+    _torch._wangp_mps_patched = True
+
     chip_name = _get_chip_name()
     system_ram_gb = _get_system_memory_gb()
     total_memory_bytes = int(system_ram_gb * 1024 ** 3)
@@ -34,10 +38,14 @@ def apply_mps_patch():
     print(f"[MPS Patch] Detected: {chip_name}, {system_ram_gb:.0f}GB RAM")
     print(f"[MPS Patch] Device capability: {dev_cap}, BF16: {bfloat16_supported}")
 
+    # MMGP reuses weight buffers after CUDA events complete. On MPS these
+    # fences must synchronize real work: no-op events allow buffers to be
+    # overwritten while the GPU still reads them, corrupting later steps.
     # Dummy objects
     _dummy_stream = types.SimpleNamespace(
         synchronize=_torch.mps.synchronize,
-        wait_stream=lambda *a, **kw: None,
+        wait_stream=lambda *a, **kw: _torch.mps.synchronize(),
+        wait_event=lambda *a, **kw: _torch.mps.synchronize(),
         query=lambda: True,
         priority=0,
     )
@@ -54,9 +62,9 @@ def apply_mps_patch():
 
     class _DummyEvent:
         def __init__(self, *a, **kw): pass
-        def record(self, *a, **kw): pass
+        def record(self, *a, **kw): _torch.mps.synchronize()
         def elapsed_time(self, *a, **kw): return 0.0
-        def synchronize(self, *a, **kw): pass
+        def synchronize(self, *a, **kw): _torch.mps.synchronize()
         def query(self): return True
 
     class _DummyDeviceContext:
@@ -125,8 +133,9 @@ def apply_mps_patch():
     class _PatchedStream:
         priority = 0
         def __init__(self, *a, **kw): pass
-        def synchronize(self, *a, **kw): pass
-        def wait_stream(self, *a, **kw): pass
+        def synchronize(self, *a, **kw): _torch.mps.synchronize()
+        def wait_stream(self, *a, **kw): _torch.mps.synchronize()
+        def wait_event(self, *a, **kw): _torch.mps.synchronize()
         def query(self): return True
 
     _cuda.Stream = _PatchedStream
